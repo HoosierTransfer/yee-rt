@@ -1,13 +1,12 @@
-use nalgebra::{Vector3, Matrix4, Unit};
-use std::f32::consts::PI;
+use nalgebra::{Vector3, Matrix4, Rotation3};
 
 pub struct Camera {
-    position: Vector3<f32>,
-    world_up: Vector3<f32>,
-    front: Vector3<f32>,
-    right: Vector3<f32>,
-    up: Vector3<f32>,
-    euler_angle: Vector3<f32>,
+    pub position: Vector3<f32>,
+    pub world_up: Vector3<f32>,
+    pub front: Vector3<f32>,
+    pub right: Vector3<f32>,
+    pub up: Vector3<f32>,
+    pub euler_angle: Vector3<f32>,
 }
 
 impl Camera {
@@ -38,7 +37,7 @@ impl Camera {
     }
 
     pub fn rotate(&mut self, angle: f32, axis: Vector3<f32>) {
-        let rotation = Matrix4::rotation(axis, angle.to_radians());
+        let rotation = Matrix4::from(Rotation3::new(axis * angle.to_radians()));
         let new_front = rotation.transform_vector(&self.front);
         self.euler_angle.y = new_front.y.asin().to_degrees();
         self.euler_angle.x = new_front.z.atan2(new_front.x).to_degrees();
@@ -46,15 +45,21 @@ impl Camera {
     }
 
     pub fn get_view_matrix(&self) -> Matrix4<f32> {
-        Matrix4::look_at_rh(&self.position, &(self.position + self.front), &self.up)
+        Matrix4::look_at_rh(&self.position.into(), &(self.position + self.front).into(), &self.up)
     }
 
-    pub fn process_keyboard(&mut self, window: &glfw::Window, delta_time: f32) {
-        let camera_speed = 2.5 * delta_time;
-
-        if window.get_key(glfw::Key::LeftShift) == glfw::Action::Press {
-            self.position += camera_speed * self.front;
+    pub fn process_keyboard(&mut self, direction: &str, delta_time: f32) {
+        let velocity = 2.5 * delta_time;
+        match direction {
+            "FORWARD" => self.position += self.front * velocity,
+            "BACKWARD" => self.position -= self.front * velocity,
+            "LEFT" => self.position -= self.right * velocity,
+            "RIGHT" => self.position += self.right * velocity,
+            "UP" => self.position += self.up * velocity,
+            "DOWN" => self.position -= self.up * velocity,
+            _ => (),
         }
+        
     }
 
     pub fn process_mouse_movement(&mut self, xoffset: f32, yoffset: f32, constrain_pitch: bool) {

@@ -1,9 +1,12 @@
-use glutin::event::{Event, WindowEvent, VirtualKeyCode, ElementState};
+use glutin::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent};
 use glutin::event_loop::{ControlFlow, EventLoop};
 use glutin::window::WindowBuilder;
 use glutin::ContextBuilder;
+use std::collections::HashSet;
+use std::time::Instant;
 
 mod shader;
+mod camera;
 
 fn main() {
     let el = EventLoop::new();
@@ -19,7 +22,10 @@ fn main() {
 
     gl::load_with(|symbol| windowed_context.get_proc_address(symbol) as *const _);
 
-    let mut shader = shader::Shader::new("basic");
+    windowed_context.window().set_cursor_grab(true).unwrap();
+    windowed_context.window().set_cursor_visible(false);
+
+    let mut shader = shader::Shader::new("main");
 
     shader.compile();
     
@@ -55,8 +61,21 @@ fn main() {
         gl::BindVertexArray(0);
     }
 
+    let mut camera = camera::Camera::new(
+        nalgebra::Vector3::new(0.0, 0.0, 3.0),
+        nalgebra::Vector3::new(0.0, 1.0, 0.0),
+        nalgebra::Vector3::new(-90.0, 0.0, 0.0)
+    );
+    let (width, height): (u32, u32) = windowed_context.window().inner_size().into();
+
+    let mut pressed_keys: HashSet<VirtualKeyCode> = HashSet::new();
+
+    let mut last_frame = Instant::now();
+
+    let projection = nalgebra::Perspective3::new(width as f32 / height as f32, 45.0, 0.1, 100.0);
+
     el.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::Poll;
 
         match event {
             Event::LoopDestroyed => return,
@@ -65,13 +84,55 @@ fn main() {
                     *control_flow = ControlFlow::Exit;
                 },
                 WindowEvent::KeyboardInput { input, .. } => {
-                    if let Some(VirtualKeyCode::Escape) = input.virtual_keycode {
-                        if input.state == ElementState::Pressed {
-                            *control_flow = ControlFlow::Exit;
+                    if let Some(keycode) = input.virtual_keycode {
+                        match input.state {
+                            ElementState::Pressed => {
+                                pressed_keys.insert(keycode);
+                            },
+                            ElementState::Released => {
+                                pressed_keys.remove(&keycode);
+                            },
                         }
                     }
                 },
                 _ => (),
+            },
+            Event::DeviceEvent { event, .. } => match event {
+                DeviceEvent::MouseMotion { delta } => {
+                    let (x, y) = delta;
+                    camera.process_mouse_movement(x as f32, -y as f32, false);
+                },
+                _ => (),
+            },
+            Event::MainEventsCleared => {
+                let current_frame = Instant::now();
+                let delta_time = current_frame.duration_since(last_frame).as_secs_f32();
+                last_frame = current_frame;
+                let mut speed = 2.5 * delta_time;
+                if pressed_keys.contains(&VirtualKeyCode::LShift) {
+                    speed *= 2.0;
+                }
+                if pressed_keys.contains(&VirtualKeyCode::W) {
+                    camera.process_keyboard("FORWARD", speed);
+                }
+                if pressed_keys.contains(&VirtualKeyCode::S) {
+                    camera.process_keyboard("BACKWARD", speed);
+                }
+                if pressed_keys.contains(&VirtualKeyCode::A) {
+                    camera.process_keyboard("LEFT", speed);
+                }
+                if pressed_keys.contains(&VirtualKeyCode::D) {
+                    camera.process_keyboard("RIGHT", speed);
+                }
+                if pressed_keys.contains(&VirtualKeyCode::Space) {
+                    camera.process_keyboard("UP", speed);
+                }
+
+                if pressed_keys.contains(&VirtualKeyCode::C) {
+                    camera.process_keyboard("DOWN", speed);
+                }
+
+                windowed_context.window().request_redraw();
             },
             Event::RedrawRequested(_) => {
                 unsafe {
@@ -79,6 +140,11 @@ fn main() {
                     gl::Clear(gl::COLOR_BUFFER_BIT);
 
                     shader.use_program();
+
+                    shader.set_vec3("cameraPosition", camera.position.into());
+                    shader.set_mat4("projectionMatrix", projection.into());
+                    shader.set_mat4("viewMatrix", camera.get_view_matrix().into());
+                    shader.set_float("time", last_frame.elapsed().as_secs_f32());
                     
                     gl::BindVertexArray(vao);
                     gl::DrawArrays(gl::TRIANGLES, 0, 6);

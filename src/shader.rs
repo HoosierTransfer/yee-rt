@@ -1,6 +1,7 @@
 use gl::types::*;
 use std::fs;
 
+
 pub enum ShaderType {
     Vertex,
     Fragment,
@@ -217,6 +218,24 @@ impl Shader {
     pub fn set_vec4(&self, name: &str, value: [f32; 4]) {
         unsafe {
             gl::Uniform4fv(gl::GetUniformLocation(self.id, std::ffi::CString::new(name).unwrap().as_ptr()), 1, value.as_ptr());
+        }
+    }
+
+    pub fn set_mat2(&self, name: &str, value: nalgebra::Matrix2<f32>) {
+        unsafe {
+            gl::UniformMatrix2fv(gl::GetUniformLocation(self.id, std::ffi::CString::new(name).unwrap().as_ptr()), 1, gl::FALSE, value.as_slice().as_ptr());
+        }
+    }
+
+    pub fn set_mat3(&self, name: &str, value: nalgebra::Matrix3<f32>) {
+        unsafe {
+            gl::UniformMatrix3fv(gl::GetUniformLocation(self.id, std::ffi::CString::new(name).unwrap().as_ptr()), 1, gl::FALSE, value.as_slice().as_ptr());
+        }
+    }
+
+    pub fn set_mat4(&self, name: &str, value: nalgebra::Matrix4<f32>) {
+        unsafe {
+            gl::UniformMatrix4fv(gl::GetUniformLocation(self.id, std::ffi::CString::new(name).unwrap().as_ptr()), 1, gl::FALSE, value.as_slice().as_ptr());
         }
     }
 
