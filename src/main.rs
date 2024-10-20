@@ -2,11 +2,51 @@ use glutin::event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEven
 use glutin::event_loop::{ControlFlow, EventLoop};
 use glutin::window::WindowBuilder;
 use glutin::ContextBuilder;
+use objects::Object;
+use nalgebra::Vector3;
+use transform::Transform;
+
 use std::collections::HashSet;
+use std::ops::Mul;
 use std::time::Instant;
+use std::mem;
+use std::ptr;
+use std::sync::Arc;
 
 mod shader;
 mod camera;
+mod objects;
+mod transform;
+mod compound_object;
+
+fn hue_to_rgb(hue: f32) -> Vector3<f32> {
+    let s = 1.0;
+    let v = 1.0;
+
+    let c = v * s;
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+
+    let (r_prime, g_prime, b_prime) = if hue < 60.0 {
+        (c, x, 0.0)
+    } else if hue < 120.0 {
+        (x, c, 0.0)
+    } else if hue < 180.0 {
+        (0.0, c, x)
+    } else if hue < 240.0 {
+        (0.0, x, c)
+    } else if hue < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    let r = (r_prime + m).clamp(0.0, 1.0);
+    let g = (g_prime + m).clamp(0.0, 1.0);
+    let b = (b_prime + m).clamp(0.0, 1.0);
+
+    Vector3::new(r, g, b)
+}
 
 fn main() {
     let el = EventLoop::new();
@@ -26,6 +66,8 @@ fn main() {
     windowed_context.window().set_cursor_visible(false);
 
     let mut shader = shader::Shader::new("main");
+
+    shader.add_define("SSBO_SIZE", "512", shader::ShaderType::Fragment);
 
     shader.compile();
     
@@ -61,16 +103,145 @@ fn main() {
         gl::BindVertexArray(0);
     }
 
+    let mut sphere = objects::Sphere::new(
+        Transform::new(
+            nalgebra::Vector3::new(0.0, 1.0, 0.0),
+            nalgebra::Vector3::new(1.0, 1.0, 1.0),
+            nalgebra::Vector3::new(0.0, 0.0, 0.0)
+        ),
+        objects::Material {
+            color: nalgebra::Vector3::new(1.0, 0.0, 0.0),
+            roughness: 0.0,
+            isMetal: false,
+            isDielectric: false,
+            ior: 1.0
+        }
+    );
+    let sphere2 = objects::Sphere::new(
+        Transform::new(
+            nalgebra::Vector3::new(5.0, 1.0, 0.0),
+            nalgebra::Vector3::new(1.0, 1.0, 1.0),
+            nalgebra::Vector3::new(0.0, 0.0, 0.0)
+        ),
+        objects::Material {
+            color: nalgebra::Vector3::new(0.8, 0.6, 0.2),
+            roughness: 0.5,
+            isMetal: true,
+            isDielectric: false,
+            ior: 1.0
+        }
+    );
+    let sphere3 = objects::Sphere::new(
+        Transform::new(
+            nalgebra::Vector3::new(3.0, 1.0, 0.0),
+            nalgebra::Vector3::new(1.0, 1.0, 1.0),
+            nalgebra::Vector3::new(0.0, 0.0, 0.0)
+        ),
+        objects::Material {
+            color: nalgebra::Vector3::new(1.0, 1.0, 1.0),
+            roughness: 0.0,
+            isMetal: false,
+            isDielectric: true,
+            ior: 1.45
+        }
+    );
+    let sphereGround = objects::Sphere::new(
+        Transform::new(
+            nalgebra::Vector3::new(0.0, 1002.0, 0.0),
+            nalgebra::Vector3::new(1000.0, 1000.0, 1000.0),
+            nalgebra::Vector3::new(0.0, 0.0, 0.0)
+        ),
+        objects::Material {
+            color: nalgebra::Vector3::new(1.0, 1.0, 1.0),
+            roughness: 0.0,
+            isMetal: false,
+            isDielectric: false,
+            ior: 1.0
+        }
+    );
+
+    let mut box1 = objects::Box::new(
+        Transform::new(
+            nalgebra::Vector3::new(0.0, -3.0, 3.0),
+            nalgebra::Vector3::new(1.0, 2.0, 1.0),
+            nalgebra::Vector3::new(0.0, 0.0, 0.0)
+        ),
+        objects::Material {
+            color: nalgebra::Vector3::new(0.2, 0.9, 0.2),
+            roughness: 0.0,
+            isMetal: false,
+            isDielectric: false,
+            ior: 1.0
+        }
+    );
+
+    let mut object_group = compound_object::CompoundObject::new(Transform::new(
+        nalgebra::Vector3::new(0.0, 0.0, 0.0),
+        nalgebra::Vector3::new(1.0, 1.0, 1.0),
+        nalgebra::Vector3::new(0.0, 0.0, 0.0)
+    ));
+
+    let thingy = objects::Box::new(
+        Transform::new(
+            nalgebra::Vector3::new(0.0, -3.0, 0.0),
+            nalgebra::Vector3::new(1.0, 2.0, 1.0),
+            nalgebra::Vector3::new(0.0, 0.0, 0.0)
+        ),
+        objects::Material {
+            color: nalgebra::Vector3::new(0.2, 0.2, 0.2),
+            roughness: 0.0,
+            isMetal: false,
+            isDielectric: false,
+            ior: 1.0
+        }
+    );
+
+    object_group.add_object(Box::new(thingy));
+
+    let mut scene_ssbo: u32 = 0;
+    let mut uint_data: Vec<u32> = sphere.get_gpu_data();
+    uint_data.append(&mut sphere2.get_gpu_data());
+    uint_data.append(&mut sphere3.get_gpu_data());
+    uint_data.append(&mut sphereGround.get_gpu_data());
+    uint_data.append(&mut box1.get_gpu_data());
+    uint_data.append(&mut object_group.get_gpu_data());
+
+    unsafe {
+        gl::GenBuffers(1, &mut scene_ssbo);
+        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, scene_ssbo);
+
+        gl::BufferData(
+            gl::SHADER_STORAGE_BUFFER,
+            (uint_data.len() * mem::size_of::<u32>()) as isize,
+            ptr::null(),
+            gl::DYNAMIC_DRAW,
+        );
+
+        gl::BufferSubData(
+            gl::SHADER_STORAGE_BUFFER,
+            0,
+            (uint_data.len() * mem::size_of::<u32>()) as isize,
+            uint_data.as_ptr() as *const _,
+        );
+
+        gl::BindBufferBase(gl::SHADER_STORAGE_BUFFER, 0, scene_ssbo);
+
+        gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
+    }
+
     let mut camera = camera::Camera::new(
         nalgebra::Vector3::new(0.0, 0.0, 3.0),
         nalgebra::Vector3::new(0.0, 1.0, 0.0),
         nalgebra::Vector3::new(-90.0, 0.0, 0.0)
     );
+
     let (width, height): (u32, u32) = windowed_context.window().inner_size().into();
 
     let mut pressed_keys: HashSet<VirtualKeyCode> = HashSet::new();
 
     let mut last_frame = Instant::now();
+
+    let mut start_frame = Instant::now();
 
     let projection = nalgebra::Perspective3::new(width as f32 / height as f32, 45.0, 0.1, 100.0);
 
@@ -135,7 +306,32 @@ fn main() {
                 windowed_context.window().request_redraw();
             },
             Event::RedrawRequested(_) => {
+                
                 unsafe {
+                    // move over time
+                    sphere.transform.position.x = 2.0 * (start_frame.elapsed().as_secs_f32() * 0.5).sin();
+
+                    sphere.material.color = hue_to_rgb((start_frame.elapsed().as_secs_f32() * 360.0) % 360.0);
+
+                    box1.transform.rotation.y = start_frame.elapsed().as_secs_f32() * 90.0;
+                    box1.transform.rotation.x = start_frame.elapsed().as_secs_f32() * 128.0;
+
+                    let mut uint_data: Vec<u32> = sphere.get_gpu_data();
+                    uint_data.append(&mut sphere2.get_gpu_data());
+                    uint_data.append(&mut sphere3.get_gpu_data());
+                    uint_data.append(&mut sphereGround.get_gpu_data());
+                    uint_data.append(&mut box1.get_gpu_data());
+                    uint_data.append(&mut object_group.get_gpu_data());
+            
+                    gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, scene_ssbo);
+                    gl::BufferSubData(
+                        gl::SHADER_STORAGE_BUFFER,
+                        0,
+                        (uint_data.len() * mem::size_of::<u32>()) as isize,
+                        uint_data.as_ptr() as *const _,
+                    );
+                    gl::BindBuffer(gl::SHADER_STORAGE_BUFFER, 0);
+
                     gl::ClearColor(0.0, 0.0, 0.0, 1.0);
                     gl::Clear(gl::COLOR_BUFFER_BIT);
 
@@ -145,6 +341,9 @@ fn main() {
                     shader.set_mat4("projectionMatrix", projection.into());
                     shader.set_mat4("viewMatrix", camera.get_view_matrix().into());
                     shader.set_float("time", last_frame.elapsed().as_secs_f32());
+                    shader.set_int("objectCount", 1);
+
+                    gl::BindBufferBase(gl::SHADER_STORAGE_BUFFER, 0, scene_ssbo);
                     
                     gl::BindVertexArray(vao);
                     gl::DrawArrays(gl::TRIANGLES, 0, 6);

@@ -1,7 +1,6 @@
 use gl::types::*;
 use std::fs;
 
-
 pub enum ShaderType {
     Vertex,
     Fragment,
